@@ -6,10 +6,10 @@ import logging
 from urllib.parse import urljoin, urlparse
 import os
 import json
-import openai
 from dotenv import load_dotenv
 import time
 import random
+from ..ranking.openai import OpenAIRanker
 
 load_dotenv()
 
@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 class LinkScraper:
     def __init__(self):
         self.keywords = self._load_keywords()
-        self.openai_client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        self.openai_ranker = OpenAIRanker()
         self.headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
@@ -37,11 +37,10 @@ class LinkScraper:
             'Pragma': 'no-cache',
             'Cache-Control': 'no-cache',
             'TE': 'trailers',
-            'DNT': '1',
-            'Host': 'www.bozeman.net',
-            'Origin': 'https://www.bozeman.net',
-            'Referer': 'https://www.bozeman.net/'
+            'DNT': '1'
         }
+        self.ranking_method = "openai"  # Default to OpenAI
+        self.ml_ranker = None  # Will be set by API if ML ranking is chosen
         
     def _load_keywords(self) -> List[str]:
         """Load keywords from environment or use defaults."""
@@ -64,13 +63,16 @@ class LinkScraper:
             
             # Update headers with correct host and origin for the specific URL
             parsed_url = urlparse(url)
-            self.headers['Host'] = parsed_url.netloc
-            self.headers['Origin'] = f"{parsed_url.scheme}://{parsed_url.netloc}"
-            self.headers['Referer'] = f"{parsed_url.scheme}://{parsed_url.netloc}/"
+            headers = self.headers.copy()
+            headers.update({
+                'Host': parsed_url.netloc,
+                'Origin': f"{parsed_url.scheme}://{parsed_url.netloc}",
+                'Referer': f"{parsed_url.scheme}://{parsed_url.netloc}/"
+            })
             
             async with session.get(
                 url, 
-                headers=self.headers, 
+                headers=headers, 
                 ssl=False, 
                 timeout=timeout,
                 allow_redirects=True
@@ -83,7 +85,7 @@ class LinkScraper:
                     # Try one more time
                     async with session.get(
                         url, 
-                        headers=self.headers, 
+                        headers=headers, 
                         ssl=False, 
                         timeout=timeout,
                         allow_redirects=True
@@ -117,67 +119,36 @@ class LinkScraper:
                 'title': text.strip(),
                 'content_type': self._guess_content_type(url),
                 'keywords': self._extract_keywords(link),
+                'content': str(link)  # Store HTML content for ML features
             }
             links.append(link_data)
             
         return links
 
     async def rank_links_batch(self, links: List[Dict], batch_size: int = 10) -> List[Dict]:
-        """Rank links in batches using OpenAI API."""
-        ranked_links = []
-        
-        # Process links in batches
-        for i in range(0, len(links), batch_size):
-            batch = links[i:i + batch_size]
+        """Rank links using either OpenAI API or ML model."""
+        if self.ranking_method == "ml" and self.ml_ranker is not None:
+            # Use ML ranker
+            scores = self.ml_ranker.batch_calculate_scores(links)
+            for link, score in zip(links, scores):
+                link['relevance_score'] = score
+        else:
+            # Use OpenAI ranker
+            for link in links:
+                # Add keywords to link_data for ranking
+                link_data = {
+                    'url': link['url'],
+                    'title': link['title'],
+                    'keywords': link['keywords'],
+                    'description': '',  # Could be added if we extract meta descriptions
+                }
+                link['relevance_score'] = self.openai_ranker.calculate_score(link_data)
+                # Add small delay between requests
+                await asyncio.sleep(0.1)
             
-            # Create a single prompt for the entire batch
-            batch_prompt = "Analyze the following links and rate their relevance to financial and budget content. For each link, provide a score between 0.0 and 1.0.\n\n"
-            for idx, link in enumerate(batch, 1):
-                batch_prompt += f"Link {idx}:\nURL: {link['url']}\nTitle: {link['title']}\nKeywords: {', '.join(link['keywords'])}\n\n"
-            
-            batch_prompt += "\nRespond with a JSON object where keys are link numbers and values are scores. Example: {'1': 0.8, '2': 0.4, ...}"
-            
-            try:
-                # Make a single API call for the batch
-                response = await asyncio.to_thread(
-                    self.openai_client.chat.completions.create,
-                    model="gpt-3.5-turbo",
-                    messages=[
-                        {"role": "system", "content": "You are a link relevance scorer. Respond only with a JSON object containing scores."},
-                        {"role": "user", "content": batch_prompt}
-                    ]
-                )
-                
-                # Parse the response
-                try:
-                    scores = json.loads(response.choices[0].message.content.strip())
-                    
-                    # Apply scores to links
-                    for idx, link in enumerate(batch, 1):
-                        link['relevance_score'] = float(scores.get(str(idx), 0.0))
-                        ranked_links.append(link)
-                        
-                except (json.JSONDecodeError, ValueError) as e:
-                    logger.error(f"Error parsing OpenAI response: {str(e)}")
-                    # Assign default scores if parsing fails
-                    for link in batch:
-                        link['relevance_score'] = 0.0
-                        ranked_links.append(link)
-                
-                # Add delay between batches
-                if i + batch_size < len(links):
-                    await asyncio.sleep(2)
-                    
-            except Exception as e:
-                logger.error(f"Error in batch processing: {str(e)}")
-                # Add links with default score on error
-                for link in batch:
-                    link['relevance_score'] = 0.0
-                    ranked_links.append(link)
-        
         # Sort all links by relevance score
-        ranked_links.sort(key=lambda x: x['relevance_score'], reverse=True)
-        return ranked_links
+        links.sort(key=lambda x: x['relevance_score'], reverse=True)
+        return links
 
     def _is_valid_url(self, url: str) -> bool:
         """Check if URL is valid and meets criteria."""
@@ -225,7 +196,7 @@ class LinkScraper:
             # First extract all links
             links = self.extract_links(html, url)
             
-            # Then rank them in batches
+            # Then rank them using the selected method
             ranked_links = await self.rank_links_batch(links, batch_size=10)
             
             return ranked_links
