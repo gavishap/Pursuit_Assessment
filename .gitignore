@@ -53,4 +53,7 @@ htmlcov/
 .tox/
 .coverage.*
 coverage.xml
-*.cover 
+*.cover
+
+# Large model files
+models/deep_ranker_v3.pt 
