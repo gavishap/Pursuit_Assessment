@@ -1,4 +1,4 @@
-from pydantic import BaseModel, HttpUrl
+from pydantic import BaseModel, HttpUrl, Field
 from typing import List, Optional, Dict
 from datetime import datetime
 
@@ -10,11 +10,16 @@ class LinkBase(BaseModel):
     link_metadata: Optional[Dict] = None
 
 class LinkCreate(LinkBase):
-    pass
+    base_url: HttpUrl
 
-class Link(LinkBase):
+class LinkResponse(LinkBase):
     id: int
-    relevance_score: float
+    base_url: HttpUrl
+    semantic_score: float
+    openai_score: float
+    nlp_score: float
+    deep_learning_score: float
+    ensemble_score: float
     created_at: datetime
     updated_at: datetime
 
@@ -23,7 +28,9 @@ class Link(LinkBase):
 
 class ScrapeRequest(BaseModel):
     url: HttpUrl
-    max_links: Optional[int] = 100
+    min_relevance: Optional[float] = Field(0.5, ge=0.0, le=1.0, description="Minimum ensemble score threshold")
+    max_links: Optional[int] = Field(100, gt=0, le=1000, description="Maximum number of links to return")
+    keywords: List[str] = Field(..., min_items=1, description="Keywords to use for ranking relevance. These define the context for scoring.")
 
 class HealthCheck(BaseModel):
     status: str

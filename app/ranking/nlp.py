@@ -1,22 +1,21 @@
-import numpy as np
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
 import spacy
-from gensim.models import KeyedVectors
-from transformers import RobertaModel, RobertaTokenizer
-import torch
-from typing import List, Tuple
-import logging
-from urllib.parse import urlparse, parse_qs
+from transformers import RobertaTokenizer, RobertaModel
+from sklearn.feature_extraction.text import TfidfVectorizer
+from typing import List, Dict, Tuple
+import numpy as np
+from urllib.parse import urlparse
 import re
-
+import logging
+from .base import BaseRanker
+from urllib.parse import urlparse, unquote, parse_qs, urlencode
 logger = logging.getLogger(__name__)
 
-class AdvancedNLPRanker:
+class AdvancedNLPRanker(BaseRanker):
     """A comprehensive NLP ranker using multiple advanced techniques."""
     
     def __init__(self):
         """Initialize various NLP models and vectorizers."""
+        super().__init__(name="nlp")
         # Load spaCy model for text processing and word vectors
         self.nlp = spacy.load('en_core_web_lg')
         

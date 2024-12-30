@@ -5,14 +5,16 @@ from urllib.parse import urlparse
 import re
 from typing import List, Dict, Tuple
 import logging
+from .base import BaseRanker
 
 logger = logging.getLogger(__name__)
 
-class SemanticRanker:
+class SemanticRanker(BaseRanker):
     """A ranker that uses BERT embeddings to score URLs based on context."""
     
     def __init__(self):
         """Initialize the ranker with a BERT model."""
+        super().__init__(name="semantic")
         self.model = SentenceTransformer('all-MiniLM-L6-v2')
         
     def _parse_url(self, url: str) -> Dict[str, str]:

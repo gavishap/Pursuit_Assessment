@@ -1,21 +1,25 @@
 from fastapi import FastAPI, HTTPException, Depends, Query
 from sqlalchemy.orm import Session
-from typing import List, Optional, Dict
-from . import models
-from .models.base import get_db, engine
-from .models.link import Link as DBLink
-from .api.models import Link, LinkCreate, ScrapeRequest, HealthCheck
-from .core.scraper import LinkScraper
-from .ranking.ml import MLRanker
-import logging
+from sqlalchemy import desc, String
+from typing import List, Optional
+from pathlib import Path
 from datetime import datetime
-from sqlalchemy.dialects.sqlite import insert
-from sqlalchemy import update, desc
-from sqlalchemy.exc import IntegrityError
+from urllib.parse import urlparse, parse_qs
 import os
 
-# Create database tables
-models.base.Base.metadata.create_all(bind=engine)
+from .api import models
+from .core import scraper
+from .models.base import SessionLocal, engine, Base
+from .models.link import Link
+from .ranking import SemanticRanker, OpenAIRanker, AdvancedNLPRanker, TrainedDeepRanker
+import logging
+
+# Initialize logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Create database tables on startup if they don't exist
+Base.metadata.create_all(bind=engine)
 
 app = FastAPI(
     title="High-Value Link Scraper API",
@@ -23,149 +27,200 @@ app = FastAPI(
     version="1.0.0"
 )
 
-logger = logging.getLogger(__name__)
-scraper = LinkScraper()
+# Initialize rankers
+semantic_ranker = SemanticRanker()
+openai_ranker = OpenAIRanker(api_key=os.getenv('OPENAI_API_KEY'))
+nlp_ranker = AdvancedNLPRanker()
+deep_ranker = TrainedDeepRanker()
 
-# Initialize ML ranker if model exists
-model_path = os.path.join(os.path.dirname(__file__), '..', 'models')
-ml_ranker = MLRanker(model_path) if os.path.exists(model_path) else None
+# Dependency to get database session
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
-@app.get("/health", response_model=HealthCheck)
-async def health_check():
-    """Check API health status."""
-    return {
-        "status": "healthy",
-        "version": "1.0.0",
-        "ml_model_loaded": ml_ranker is not None
-    }
+@app.get("/health")
+def health_check():
+    """Check if the API is running."""
+    return {"status": "healthy", "version": "1.0.0"}
 
-@app.post("/scrape", response_model=List[Link])
+@app.post("/scrape", response_model=List[models.LinkResponse])
 async def scrape_url(
-    request: ScrapeRequest,
-    ranking_method: str = Query("openai", enum=["openai", "ml"]),
-    keywords: Optional[List[str]] = Query(None),
+    request: models.ScrapeRequest,
     db: Session = Depends(get_db)
 ):
     """
     Scrape links from a URL and store them in the database.
     
-    - ranking_method: Choose between 'openai' or 'ml' ranking
-    - keywords: Optional list of keywords to prioritize
+    - Scrapes all links from the given URL
+    - Ranks them using multiple ranking methods
+    - Stores results in database
+    - Returns links above the minimum relevance threshold
     """
     try:
-        # Use ML ranker if requested and available
-        if ranking_method == "ml" and ml_ranker is not None:
-            scraper.ranking_method = "ml"
-            scraper.ml_ranker = ml_ranker
-        else:
-            scraper.ranking_method = "openai"
-            scraper.ml_ranker = None
-            
-        # Set custom keywords if provided
-        if keywords:
-            scraper.keywords = keywords
-            
-        links = await scraper.scrape(str(request.url))
+        # Initialize scraper with all rankers
+        link_scraper = scraper.LinkScraper(
+            semantic_ranker=semantic_ranker,
+            openai_ranker=openai_ranker,
+            nlp_ranker=nlp_ranker,
+            deep_ranker=deep_ranker
+        )
         
-        # Limit the number of links if specified
-        links = links[:request.max_links]
+        # Scrape links
+        links = await link_scraper.scrape(str(request.url))
+        logger.info(f"Found {len(links)} links from {request.url}")
         
-        # Store links in database
-        db_links = []
-        seen_urls = set()
+        # Process and store links
+        stored_links = []
         
         for link_data in links:
             try:
                 url = str(link_data['url'])
+                # Use keywords from request as context
+                context = ' '.join(request.keywords) if request.keywords else ''
                 
-                if url in seen_urls:
+                # Get scores from all rankers
+                semantic_score = semantic_ranker.score_url(url, context)
+                openai_score = await openai_ranker.score_url(url, context)
+                nlp_score = nlp_ranker.score_url(url, context)
+                deep_score = deep_ranker.score_url(url, context)
+                
+                # Calculate ensemble score
+                ensemble_score = (semantic_score + openai_score + nlp_score + deep_score) / 4
+                
+                # Skip if below threshold
+                if ensemble_score < request.min_relevance:
                     continue
-                seen_urls.add(url)
                 
-                # Try to find existing link
-                existing_link = db.query(DBLink).filter(DBLink.url == url).first()
+                # Create or update link in database
+                db_link = db.query(Link).filter(
+                    Link.base_url == str(request.url),
+                    Link.url == url
+                ).first()
                 
-                if existing_link:
-                    # Update existing link if the new score is higher
-                    if link_data['relevance_score'] > existing_link.relevance_score:
-                        existing_link.title = link_data['title']
-                        existing_link.content_type = link_data['content_type']
-                        existing_link.relevance_score = link_data['relevance_score']
-                        existing_link.keywords = link_data['keywords']
-                        existing_link.updated_at = datetime.utcnow()
-                    db_links.append(existing_link)
+                if db_link:
+                    # Update existing link
+                    db_link.semantic_score = semantic_score
+                    db_link.openai_score = openai_score
+                    db_link.nlp_score = nlp_score
+                    db_link.deep_learning_score = deep_score
+                    db_link.ensemble_score = ensemble_score
+                    db_link.title = link_data.get('title', '')
+                    db_link.content_type = link_data.get('content_type', '')
+                    db_link.keywords = request.keywords
+                    db_link.link_metadata = link_data.get('metadata', {})
+                    db_link.updated_at = datetime.utcnow()
                 else:
                     # Create new link
-                    new_link = DBLink(
+                    db_link = Link(
+                        base_url=str(request.url),
                         url=url,
-                        title=link_data['title'],
-                        content_type=link_data['content_type'],
-                        relevance_score=link_data['relevance_score'],
-                        keywords=link_data['keywords'],
-                        link_metadata={}
+                        title=link_data.get('title', ''),
+                        content_type=link_data.get('content_type', ''),
+                        semantic_score=semantic_score,
+                        openai_score=openai_score,
+                        nlp_score=nlp_score,
+                        deep_learning_score=deep_score,
+                        ensemble_score=ensemble_score,
+                        keywords=request.keywords,
+                        link_metadata=link_data.get('metadata', {})
                     )
-                    db.add(new_link)
-                    db_links.append(new_link)
+                    db.add(db_link)
                 
-                db.commit()
+                stored_links.append(db_link)
+                
+                if len(stored_links) >= request.max_links:
+                    break
                     
-            except IntegrityError:
-                logger.warning(f"Duplicate URL encountered: {url}, skipping...")
-                db.rollback()
-                continue
             except Exception as e:
                 logger.error(f"Error processing link {link_data.get('url', 'unknown')}: {str(e)}")
-                db.rollback()
                 continue
         
-        # Sort by relevance score before returning
-        db_links.sort(key=lambda x: x.relevance_score, reverse=True)
-        return db_links
+        db.commit()
+        
+        # Sort by ensemble score and return
+        stored_links.sort(key=lambda x: x.ensemble_score, reverse=True)
+        return stored_links[:request.max_links]
         
     except Exception as e:
         logger.error(f"Error scraping URL: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/links", response_model=List[Link])
+@app.get("/links", response_model=List[models.LinkResponse])
 async def get_links(
-    skip: int = Query(0, ge=0),
-    limit: int = Query(100, ge=1, le=1000),
-    min_relevance: Optional[float] = Query(None, ge=0.0, le=1.0),
+    base_url: Optional[str] = None,
+    min_relevance: float = Query(0.5, ge=0.0, le=1.0),
     content_type: Optional[str] = None,
     keywords: Optional[List[str]] = Query(None),
-    sort_by: str = Query("relevance", enum=["relevance", "date"]),
+    sort_by: str = Query("ensemble", enum=["ensemble", "semantic", "openai", "nlp", "deep_learning", "date"]),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=1000),
     db: Session = Depends(get_db)
 ):
     """
     Retrieve stored links with filtering and sorting options.
     
-    - skip: Number of records to skip
-    - limit: Maximum number of records to return
-    - min_relevance: Minimum relevance score filter
+    - base_url: Filter by source URL
+    - min_relevance: Minimum ensemble score threshold
     - content_type: Filter by content type
     - keywords: Filter by keywords
-    - sort_by: Sort by 'relevance' or 'date'
+    - sort_by: Sort by score type or date
     """
-    query = db.query(DBLink)
+    # First, get all links to see what's in the database
+    all_links = db.query(Link).all()
+    logger.info(f"Total links in database: {len(all_links)}")
+    if all_links:
+        sample_link = all_links[0]
+        logger.info(f"Sample link data: base_url={sample_link.base_url}, keywords={sample_link.keywords}, ensemble_score={sample_link.ensemble_score}")
     
-    # Apply filters
-    if min_relevance is not None:
-        query = query.filter(DBLink.relevance_score >= min_relevance)
+    # Now apply filters
+    query = db.query(Link).filter(Link.ensemble_score >= min_relevance)
+    
+    if base_url:
+        query = query.filter(Link.base_url == base_url)
+        filtered_by_url = query.all()
+        logger.info(f"Links after base_url filter: {len(filtered_by_url)}")
     
     if content_type:
-        query = query.filter(DBLink.content_type == content_type)
+        query = query.filter(Link.content_type == content_type)
         
     if keywords:
+        # Split the comma-separated keywords and clean them
+        if isinstance(keywords, str):
+            keywords = [k.strip() for k in keywords.split(',')]
+        elif isinstance(keywords, list) and len(keywords) == 1:
+            # Handle case where a comma-separated string is passed as a list item
+            keywords = [k.strip() for k in keywords[0].split(',')]
+            
+        logger.info(f"Filtering by keywords: {keywords}")
+        
         # Filter links that have any of the specified keywords
-        query = query.filter(DBLink.keywords.overlap(keywords))
+        from sqlalchemy import or_
+        keyword_filters = []
+        for keyword in keywords:
+            keyword_filters.append(Link.keywords.cast(String).like(f'%{keyword}%'))
+        query = query.filter(or_(*keyword_filters))
+        filtered_by_keywords = query.all()
+        logger.info(f"Links after keyword filter: {len(filtered_by_keywords)}")
     
     # Apply sorting
-    if sort_by == "date":
-        query = query.order_by(desc(DBLink.created_at))
-    else:  # sort by relevance
-        query = query.order_by(desc(DBLink.relevance_score))
+    if sort_by == "ensemble":
+        query = query.order_by(desc(Link.ensemble_score))
+    elif sort_by == "semantic":
+        query = query.order_by(desc(Link.semantic_score))
+    elif sort_by == "openai":
+        query = query.order_by(desc(Link.openai_score))
+    elif sort_by == "nlp":
+        query = query.order_by(desc(Link.nlp_score))
+    elif sort_by == "deep_learning":
+        query = query.order_by(desc(Link.deep_learning_score))
+    else:  # sort by date
+        query = query.order_by(desc(Link.created_at))
     
     links = query.offset(skip).limit(limit).all()
+    logger.info(f"Final number of links returned: {len(links)}")
     return links
 
 @app.delete("/links/{link_id}")
@@ -174,7 +229,7 @@ async def delete_link(
     db: Session = Depends(get_db)
 ):
     """Delete a link by ID."""
-    link = db.query(DBLink).filter(DBLink.id == link_id).first()
+    link = db.query(Link).filter(Link.id == link_id).first()
     if not link:
         raise HTTPException(status_code=404, detail="Link not found")
     

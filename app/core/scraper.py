@@ -2,6 +2,7 @@ import aiohttp
 import asyncio
 from bs4 import BeautifulSoup
 from typing import List, Dict, Optional
+from urllib.parse import urljoin, urlparse, parse_qs
 import logging
 from urllib.parse import urljoin, urlparse
 import os
@@ -17,41 +18,20 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class LinkScraper:
-    def __init__(self):
-        self.keywords = self._load_keywords()
-        self.openai_ranker = OpenAIRanker()
+    """Scrape links from a webpage."""
+    
+    def __init__(self, semantic_ranker=None, openai_ranker=None, nlp_ranker=None, deep_ranker=None):
+        """Initialize the scraper with rankers."""
+        self.semantic_ranker = semantic_ranker
+        self.openai_ranker = openai_ranker
+        self.nlp_ranker = nlp_ranker
+        self.deep_ranker = deep_ranker
+        
         self.headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1',
-            'sec-ch-ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
-            'sec-ch-ua-mobile': '?0',
-            'sec-ch-ua-platform': '"Windows"',
-            'Sec-Fetch-Dest': 'document',
-            'Sec-Fetch-Mode': 'navigate',
-            'Sec-Fetch-Site': 'cross-site',
-            'Sec-Fetch-User': '?1',
-            'Pragma': 'no-cache',
-            'Cache-Control': 'no-cache',
-            'TE': 'trailers',
-            'DNT': '1'
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9'
         }
-        self.ranking_method = "openai"  # Default to OpenAI
-        self.ml_ranker = None  # Will be set by API if ML ranking is chosen
-        
-    def _load_keywords(self) -> List[str]:
-        """Load keywords from environment or use defaults."""
-        default_keywords = ["ACFR", "Budget", "Finance", "Financial", "Report", "Treasury", "Tax", "Revenue", "Audit", "Fiscal", "Statement"]
-        keywords_str = os.getenv("SCRAPER_KEYWORDS")
-        if keywords_str:
-            try:
-                return json.loads(keywords_str)
-            except json.JSONDecodeError:
-                return default_keywords
-        return default_keywords
 
     async def fetch_page(self, session: aiohttp.ClientSession, url: str) -> Optional[str]:
         """Fetch a page with error handling."""
@@ -100,7 +80,7 @@ class LinkScraper:
             return None
 
     def extract_links(self, html: str, base_url: str) -> List[Dict]:
-        """Extract and process links from HTML content."""
+        """Extract links and basic metadata from HTML content."""
         soup = BeautifulSoup(html, 'html.parser')
         links = []
         
@@ -118,37 +98,50 @@ class LinkScraper:
                 'url': url,
                 'title': text.strip(),
                 'content_type': self._guess_content_type(url),
-                'keywords': self._extract_keywords(link),
-                'content': str(link)  # Store HTML content for ML features
+                'metadata': {'html': str(link)}  # Store HTML content as metadata
             }
             links.append(link_data)
             
         return links
 
-    async def rank_links_batch(self, links: List[Dict], batch_size: int = 10) -> List[Dict]:
-        """Rank links using either OpenAI API or ML model."""
-        if self.ranking_method == "ml" and self.ml_ranker is not None:
-            # Use ML ranker
-            scores = self.ml_ranker.batch_calculate_scores(links)
-            for link, score in zip(links, scores):
-                link['relevance_score'] = score
-        else:
-            # Use OpenAI ranker
-            for link in links:
-                # Add keywords to link_data for ranking
-                link_data = {
-                    'url': link['url'],
-                    'title': link['title'],
-                    'keywords': link['keywords'],
-                    'description': '',  # Could be added if we extract meta descriptions
-                }
-                link['relevance_score'] = self.openai_ranker.calculate_score(link_data)
-                # Add small delay between requests
-                await asyncio.sleep(0.1)
+    async def scrape(self, url: str) -> List[Dict]:
+        """Main scraping method."""
+        async with aiohttp.ClientSession() as session:
+            html = await self.fetch_page(session, url)
+            if not html:
+                return []
+                
+            # Extract all links
+            links = self.extract_links(html, url)
             
-        # Sort all links by relevance score
-        links.sort(key=lambda x: x['relevance_score'], reverse=True)
-        return links
+            # Return the links (ranking will be done by the API using request keywords)
+            return links
+
+    async def rank_links_batch(self, links: List[Dict], batch_size: int = 10) -> List[Dict]:
+        """Rank links in batches to avoid overloading the API."""
+        ranked_links = []
+        
+        # Process links in batches
+        for i in range(0, len(links), batch_size):
+            batch = links[i:i + batch_size]
+            ranked_batch = await self._rank_links(batch)
+            ranked_links.extend(ranked_batch)
+            
+        return ranked_links
+    
+    async def _rank_links(self, links: List[Dict]) -> List[Dict]:
+        """Initialize links with zero scores. Actual ranking is done by the API."""
+        try:
+            for link in links:
+                link['semantic_score'] = 0.0
+                link['openai_score'] = 0.0
+                link['nlp_score'] = 0.0
+                link['deep_learning_score'] = 0.0
+                link['ensemble_score'] = 0.0
+            return links
+        except Exception as e:
+            logger.error(f"Error ranking links: {str(e)}")
+            return []
 
     def _is_valid_url(self, url: str) -> bool:
         """Check if URL is valid and meets criteria."""
@@ -168,35 +161,3 @@ class LinkScraper:
         if any(term in lower_url for term in ['finance', 'budget', 'report', 'acfr']):
             return 'financial'
         return 'webpage'
-
-    def _extract_keywords(self, link_element) -> List[str]:
-        """Extract keywords from link text and attributes."""
-        keywords = []
-        text = ' '.join([
-            link_element.get_text(strip=True),
-            link_element.get('title', ''),
-            link_element.get('aria-label', ''),
-            link_element.get('href', '')
-        ]).lower()
-        
-        # Check for matches with predefined keywords
-        for keyword in self.keywords:
-            if keyword.lower() in text:
-                keywords.append(keyword)
-                
-        return list(set(keywords))
-
-    async def scrape(self, url: str) -> List[Dict]:
-        """Main scraping method."""
-        async with aiohttp.ClientSession() as session:
-            html = await self.fetch_page(session, url)
-            if not html:
-                return []
-                
-            # First extract all links
-            links = self.extract_links(html, url)
-            
-            # Then rank them using the selected method
-            ranked_links = await self.rank_links_batch(links, batch_size=10)
-            
-            return ranked_links

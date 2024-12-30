@@ -1,22 +1,20 @@
-import os
-from typing import List, Tuple
-import logging
+import openai
 from openai import AsyncOpenAI
+from typing import List, Dict, Tuple
+import logging
 import json
+from .base import BaseRanker
 
 logger = logging.getLogger(__name__)
 
-class OpenAIRanker:
-    """A ranker that uses OpenAI to score URLs based on context."""
+class OpenAIRanker(BaseRanker):
+    """A ranker that uses OpenAI's GPT models to analyze and score URLs."""
     
-    def __init__(self, api_key: str = None):
-        """Initialize the OpenAI client with API key."""
-        if api_key is None:
-            api_key = os.getenv('OPENAI_API_KEY')
-        if not api_key:
-            raise ValueError("OpenAI API key must be provided or set in OPENAI_API_KEY environment variable")
+    def __init__(self, api_key: str):
+        """Initialize the OpenAI client."""
+        super().__init__(name="openai")
         self.client = AsyncOpenAI(api_key=api_key)
-        
+    
     async def score_url(self, url: str, context: str) -> float:
         """Score a URL's relevance to the given context using OpenAI."""
         prompt = f"""You are a URL relevance scoring system. Analyze and score how relevant this URL is to the given context.
@@ -93,7 +91,7 @@ Respond with ONLY a single decimal number between 0.0 and 1.0 representing the f
             logger.debug(f"Score: {score:.4f}")
             
             return score
-            
+                
         except Exception as e:
             logger.error(f"Error scoring URL with OpenAI: {str(e)}")
             # Return a neutral score instead of 0 on error

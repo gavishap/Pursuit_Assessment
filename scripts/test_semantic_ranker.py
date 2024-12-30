@@ -156,15 +156,7 @@ async def test_rankers():
     openai_ranker = OpenAIRanker(api_key=os.getenv('OPENAI_API_KEY'))
     nlp_ranker = AdvancedNLPRanker()
     
-    # Train and initialize deep learning ranker
-    csv_path = Path(__file__).parent.parent / 'data' / 'ranked_url_classes.csv'
-    model_path = Path(__file__).parent.parent / 'models' / 'deep_ranker.pt'
-    
-    if not model_path.exists():
-        logger.info("Training deep learning model...")
-        TrainedDeepRanker.train_model(csv_path, epochs=5)
-        logger.info("Training complete")
-    
+    # Initialize deep ranker (it will handle training if needed)
     deep_ranker = TrainedDeepRanker()
     
     # Get URLs and keywords from database
