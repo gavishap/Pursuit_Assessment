@@ -139,6 +139,49 @@ An intelligent system that scrapes web pages and ranks links based on relevance 
 
 The evolution of the deep learning ranker shows a progression from simple sequence processing to sophisticated context-aware ranking. However, the fundamental challenge remains that our training data is based on page importance rather than true topical relevance. This means the model might learn to identify "important" pages rather than truly relevant ones for a given topic.
 
+### Previous Ranking Experiments
+
+#### LightGBM Ranker
+
+Initially, we experimented with LightGBM using the Microsoft Learning to Rank (MSLR) dataset. The MSLR dataset structure:
+
+- 136 numeric features per URL
+- Features included:
+  - Stream length
+  - Query-URL click count
+  - URL dwell time
+  - BM25 scores
+  - Language model scores
+  - PageRank
+  - Number of inbound/outbound links
+  - URL/domain length
+  - And many more query-document matching signals
+
+While LightGBM performed well on the MSLR dataset (NDCG@10: 0.54), we discovered that the dataset's features were too search-engine specific and didn't align with our use case. Our system needed to rank URLs without historical click data, dwell time, or complex query-document features. This led us to explore more content and semantic-based approaches.
+
+#### URL Ranker Experiment
+
+We also experimented with a pure URL-based ranker that analyzed URL structure without accessing content:
+
+- Features:
+  - URL path depth
+  - Number of query parameters
+  - TLD analysis
+  - Keyword presence in path
+  - Path segment length statistics
+  - Special character frequency
+  - Date pattern detection
+  - File extension analysis
+
+While this approach was extremely fast (no content fetching required), it proved too limited:
+
+- High false positive rate on irrelevant content with good URL structure
+- Missed relevant content with poor URL structure
+- No understanding of actual page content
+- Difficulty in handling URL shorteners and redirects
+
+These experiments led us to our current multi-model approach that combines semantic understanding, deep learning, and NLP techniques for more accurate content-based ranking.
+
 ### Technologies Used
 
 - **Backend Framework**: FastAPI
