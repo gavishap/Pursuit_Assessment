@@ -135,6 +135,8 @@ An intelligent system that scrapes web pages and ranks links based on relevance 
      - Computational requirements
      - Domain adaptation needs
 
+   **Note on Model Availability**: The system automatically handles model availability by attempting to load models in order of preference (v3 → v2). If v3 is not available (e.g., when cloning from GitHub), it will seamlessly fall back to v2. This ensures the system remains functional while maintaining the best available performance.
+
 The evolution of the deep learning ranker shows a progression from simple sequence processing to sophisticated context-aware ranking. However, the fundamental challenge remains that our training data is based on page importance rather than true topical relevance. This means the model might learn to identify "important" pages rather than truly relevant ones for a given topic.
 
 ### Technologies Used

@@ -233,8 +233,11 @@ class TrainedDeepRanker(BaseRanker):
         self.tokenizer = AutoTokenizer.from_pretrained('sentence-transformers/all-mpnet-base-v2')
         self.preprocessor = URLPreprocessor()
         
-        # Load trained model if it exists
+        # Try v3 first, fallback to v2
         model_path = Path(__file__).parent.parent.parent / 'models' / 'deep_ranker_v3.pt'
+        if not model_path.exists():
+            model_path = Path(__file__).parent.parent.parent / 'models' / 'deep_ranker_v2.pt'
+        
         if model_path.exists():
             checkpoint = torch.load(model_path, map_location=self.device)
             self.model.load_state_dict(checkpoint['model_state_dict'])
