@@ -217,6 +217,9 @@ These experiments led us to our current multi-model approach that combines seman
 
    # Install dependencies
    pip install -r requirements.txt
+
+   # Install spaCy model
+   python -m spacy download en_core_web_lg
    ```
 
 2. **Environment Setup**
