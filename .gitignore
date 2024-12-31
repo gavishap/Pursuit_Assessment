@@ -38,8 +38,8 @@ ENV/
 
 # Database
 *.db
-*.sqlite3
-*.sqlite
+*.db-shm
+*.db-wal
 
 # Logs
 *.log
