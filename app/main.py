@@ -1,3 +1,153 @@
+"""
+High-Value Link Scraper API: Main Application Flow
+================================================
+
+Here's the complete flow of operations from startup to request handling:
+
+1. Startup Sequence
+------------------
+a) Logging Initialization
+   - Configure logging with INFO level
+   - Set up logger for application-wide use
+
+b) Database Initialization
+   - Create all database tables if they don't exist
+   - Set up SQLite with optimized settings (WAL mode, connection pooling)
+
+c) Ranker Initialization
+   - Load and initialize all ranking models:
+     * Semantic Ranker: Uses sentence transformers for text similarity
+     * OpenAI Ranker: Leverages GPT for context understanding
+     * NLP Ranker: Employs spaCy for linguistic analysis
+     * Deep Learning Ranker: Custom neural network with model versioning
+
+2. Request Handling Flow
+-----------------------
+a) Scraping Endpoint (/scrape)
+   1. Receive scrape request with URL and parameters
+   2. Initialize scraper with all rankers
+   3. Extract links from target URL
+   4. For each link:
+      - Get scores from all rankers
+      - Calculate ensemble score
+      - Apply relevance threshold
+      - Store in database if qualified
+   5. Return ranked results
+
+b) Link Retrieval (/links)
+   1. Accept filtering parameters
+   2. Build dynamic SQL query
+   3. Apply filters:
+      - Base URL matching
+      - Minimum relevance threshold
+      - Content type filtering
+      - Keyword matching
+   4. Apply sorting (by score type or date)
+   5. Return paginated results
+
+3. Data Processing Pipeline
+--------------------------
+a) Link Processing
+   1. URL normalization and cleaning
+   2. Content type detection
+   3. Metadata extraction
+   4. Keyword association
+
+b) Ranking Process
+   1. Context preparation
+   2. Multi-model scoring
+   3. Ensemble score calculation
+   4. Threshold application
+
+4. Database Operations
+---------------------
+a) Write Operations
+   - New link creation
+   - Existing link updates
+   - Batch processing for efficiency
+
+b) Read Operations
+   - Filtered queries
+   - Sorted retrievals
+   - Pagination handling
+
+5. Error Handling
+----------------
+- Graceful error recovery
+- Detailed error logging
+- Client-friendly error responses
+- Transaction management
+
+6. Testing Strategy
+------------------
+a) Unit Tests
+   - Individual ranker testing:
+     * Semantic similarity accuracy
+     * OpenAI API integration
+     * NLP processing correctness
+     * Deep learning model predictions
+   - URL preprocessing validation
+   - Database operations verification
+   - Content type detection accuracy
+
+b) Integration Tests
+   - Complete scraping pipeline
+   - Multi-ranker ensemble scoring
+   - Database transaction handling
+   - API endpoint behavior
+   - Error handling scenarios
+
+c) Model Testing
+   1. Deep Learning Ranker:
+      - Model loading and versioning
+      - Inference performance
+      - Fallback mechanism
+      - Training process validation
+      - Prediction consistency
+
+   2. Semantic Ranker:
+      - Embedding quality
+      - Similarity calculations
+      - Edge case handling
+
+   3. NLP Ranker:
+      - Entity recognition
+      - Topic extraction
+      - Language processing
+      - Token handling
+
+d) Performance Testing
+   - Concurrent request handling
+   - Database query optimization
+   - Memory usage monitoring
+   - Response time benchmarking
+   - Batch processing efficiency
+
+e) Test Data Management
+   - Synthetic test cases
+   - Real-world URL samples
+   - Edge case scenarios
+   - Invalid input handling
+   - Cross-domain testing
+
+f) Continuous Testing
+   - Automated test runs
+   - Regression testing
+   - Model performance monitoring
+   - API endpoint validation
+   - Error rate tracking
+
+All tests are implemented in scripts/test_rankers.py, which serves as the main test suite
+for the entire application. This comprehensive test suite covers all rankers (Semantic, OpenAI,
+NLP, and Deep Learning), performance metrics, and system behavior. The tests include memory
+profiling (using psutil), concurrent processing validation, and extensive performance
+benchmarking for all components.
+
+The application uses FastAPI's dependency injection system for database sessions
+and implements comprehensive logging throughout the pipeline for monitoring and
+debugging purposes.
+"""
+
 from fastapi import FastAPI, HTTPException, Depends, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import desc, String

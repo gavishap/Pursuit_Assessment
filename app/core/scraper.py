@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 import time
 import random
 from ..ranking.openai import OpenAIRanker
+import re
 
 load_dotenv()
 
@@ -152,12 +153,94 @@ class LinkScraper:
             return False
 
     def _guess_content_type(self, url: str) -> str:
-        """Guess content type based on URL pattern."""
+        """Guess content type based on URL pattern and structure.
+        
+        This method analyzes URL patterns to categorize content into different types:
+        - document: Various document formats
+        - media: Images, videos, audio files
+        - info_page: About, contact, team pages
+        - blog: Blog posts, articles, news
+        - api: API endpoints, data feeds
+        - archive: Archives, listings
+        - landing: Landing or index pages
+        - resource: Resource or download pages
+        - interactive: Interactive content, tools
+        - search: Search-related pages
+        """
         lower_url = url.lower()
-        if any(ext in lower_url for ext in ['.pdf', '.doc', '.docx', '.xls', '.xlsx']):
+        
+        # Document types
+        if any(ext in lower_url for ext in [
+            '.pdf', '.doc', '.docx', '.txt', '.rtf',
+            '.xls', '.xlsx', '.csv', '.ppt', '.pptx',
+            '.odt', '.ods', '.odp', '.epub', '.mobi'
+        ]):
             return 'document'
-        if any(term in lower_url for term in ['contact', 'about', 'staff']):
+            
+        # Media files
+        if any(ext in lower_url for ext in [
+            '.jpg', '.jpeg', '.png', '.gif', '.svg',
+            '.mp4', '.avi', '.mov', '.wmv', '.flv',
+            '.mp3', '.wav', '.ogg', '.webm', '.webp'
+        ]):
+            return 'media'
+            
+        # Info pages
+        if any(term in lower_url for term in [
+            'about', 'contact', 'team', 'staff',
+            'careers', 'jobs', 'faq', 'help',
+            'support', 'privacy', 'terms', 'policy'
+        ]):
             return 'info_page'
-        if any(term in lower_url for term in ['finance', 'budget', 'report', 'acfr']):
-            return 'financial'
+            
+        # Blog/Article pages
+        if any(term in lower_url for term in [
+            'blog', 'article', 'post', 'news',
+            'story', 'update', 'release', 'press',
+            '/20', '/19'  # Common year patterns
+        ]) or re.search(r'/\d{4}/\d{2}/', lower_url):  # Date pattern
+            return 'blog'
+            
+        # API and data
+        if any(term in lower_url for ext in [
+            '/api/', '.json', '.xml', '.rss',
+            '/feed/', '/data/', '/stream/', '.graphql'
+        ]):
+            return 'api'
+            
+        # Archive/listing pages
+        if any(term in lower_url for term in [
+            'archive', 'category', 'tag', 'topics',
+            'list', 'directory', 'index', 'sitemap'
+        ]):
+            return 'archive'
+            
+        # Landing pages
+        if lower_url.endswith('/') or lower_url.endswith('index.html') or lower_url.count('/') <= 3:
+            return 'landing'
+            
+        # Resource pages
+        if any(term in lower_url for term in [
+            'download', 'resource', 'library',
+            'docs', 'documentation', 'guide',
+            'tutorial', 'example', 'template'
+        ]):
+            return 'resource'
+            
+        # Interactive content
+        if any(term in lower_url for term in [
+            'tool', 'calculator', 'generator',
+            'quiz', 'test', 'survey', 'form',
+            'dashboard', 'interactive', 'demo'
+        ]):
+            return 'interactive'
+            
+        # Search pages
+        if any(term in lower_url for term in [
+            'search', 'find', 'query', 'results',
+            'lookup', 'browse'
+        ]):
+            return 'search'
+            
+        # Default for unmatched patterns
         return 'webpage'

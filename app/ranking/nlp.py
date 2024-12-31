@@ -8,6 +8,9 @@ import re
 import logging
 from .base import BaseRanker
 from urllib.parse import urlparse, unquote, parse_qs, urlencode
+import torch
+from sklearn.metrics.pairwise import cosine_similarity
+
 logger = logging.getLogger(__name__)
 
 class AdvancedNLPRanker(BaseRanker):
